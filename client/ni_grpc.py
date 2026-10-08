@@ -160,6 +160,25 @@ def patch_legacy_local(server: str = SERVER) -> None:
     nidaqmx.task.Task = _GrpcTask
     nidaqmx.Task = _GrpcTask
 
+    # LDAQ's NITask.add_channel(scale=...) calls Scale.create_lin_scale(...)
+    # with no grpc_options, which would fall back to a (missing) local driver.
+    # Default every Scale.create_* factory to the VM.
+    import functools
+    from nidaqmx.scale import Scale
+
+    for _name in [n for n in vars(Scale) if n.startswith("create_")]:
+        _orig = getattr(Scale, _name)
+
+        def _make(orig):
+            @functools.wraps(orig)
+            def create(*args, grpc_options=None, **kwargs):
+                if grpc_options is None:
+                    grpc_options = options("", server)
+                return orig(*args, grpc_options=grpc_options, **kwargs)
+            return staticmethod(create)
+
+        setattr(Scale, _name, _make(_orig))
+
 
 def patch_legacy_acquire() -> None:
     """Make LDAQ <1.3's ``NITask.acquire_base()`` tolerate an empty buffer over gRPC.
